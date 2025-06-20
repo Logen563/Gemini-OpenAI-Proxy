@@ -12,55 +12,6 @@ if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "YOUR_ACTUAL_API_KEY_HERE") {
   process.exit(1);
 }
 
-// Middleware to handle JSON bodies
-app.use(express.json());
-
-// Proxy configuration
-const proxyOptions = {
-  target: 'https://generativelanguage.googleapis.com',
-  changeOrigin: true,
-  pathRewrite: {
-    '^/v1': '/v1beta/openai' // Rewrite /v1/* to /v1beta/openai/*
-  },
-  onProxyReq: (proxyReq, req, res) => {
-    // Handle authentication for OpenAI-compatible API
-    if (req.headers.authorization) {
-      // If there's already an authorization header, pass it through
-      proxyReq.setHeader('Authorization', req.headers.authorization);
-    } else {
-      // Otherwise, use our API key
-      proxyReq.setHeader('Authorization', `Bearer ${GOOGLE_API_KEY}`);
-    }
-    
-    console.log(`Proxying: ${req.method} ${req.path} -> ${proxyReq.path}`);
-    console.log(`Auth header: ${proxyReq.getHeader('Authorization') ? 'Set' : 'Not set'}`);
-  },
-  onProxyRes: (proxyRes, req, res) => {
-    // Add CORS headers if needed
-    proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-    proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
-    proxyRes.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
-  },
-  onError: (err, req, res) => {
-    console.error('Proxy error:', err);
-    res.status(500).json({ error: 'Proxy error', details: err.message });
-  }
-};
-
-// Create proxy middleware
-const proxy = createProxyMiddleware(proxyOptions);
-
-// Handle preflight requests
-app.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.sendStatus(200);
-});
-
-// Apply proxy to all /v1/* routes
-app.use('/v1', proxy);
-
 // Root endpoint - simple status page
 app.get('/', (req, res) => {
   res.send(`
@@ -86,11 +37,50 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Gemini-to-OpenAI proxy server is running' });
 });
 
+// Handle preflight requests
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.sendStatus(200);
+});
+
+// Simple proxy configuration with minimal interference
+const proxy = createProxyMiddleware({
+  target: 'https://generativelanguage.googleapis.com',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/v1': '/v1beta/openai'
+  },
+  onProxyReq: (proxyReq, req, res) => {
+    // Set the authorization header
+    if (req.headers.authorization) {
+      proxyReq.setHeader('Authorization', req.headers.authorization);
+    } else {
+      proxyReq.setHeader('Authorization', `Bearer ${GOOGLE_API_KEY}`);
+    }
+    
+    console.log(`${req.method} ${req.url} -> ${proxyReq.path}`);
+  },
+  onProxyRes: (proxyRes, req, res) => {
+    console.log(`Response: ${proxyRes.statusCode}`);
+  },
+  onError: (err, req, res) => {
+    console.error(`Proxy error for ${req.method} ${req.url}:`, err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Proxy error', details: err.message });
+    }
+  }
+});
+
+// Apply proxy to /v1 routes
+app.use('/v1', proxy);
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Proxy server running on http://localhost:${PORT}`);
   console.log(`📝 Use this URL in Xcode: http://localhost:${PORT}/`);
-  console.log(`🔑 Make sure GOOGLE_API_KEY environment variable is set`);
+  console.log(`🔑 Google API key: ${GOOGLE_API_KEY ? 'Set' : 'NOT SET'}`);
 });
 
 // Graceful shutdown
